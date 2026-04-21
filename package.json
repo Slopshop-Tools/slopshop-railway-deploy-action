@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "ncc build src/index.ts -o dist",
+    "build": "ncc build src/index.ts -o dist && tsx scripts/generate-schema.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "test": "vitest run",
@@ -15,7 +15,7 @@
       "eslint --fix",
       "prettier --write"
     ],
-    "*.{js,cjs,mjs,json,md,css,yml}": [
+    "*.{js,cjs,mjs,json,jsonc,md,css,yml}": [
       "prettier --write"
     ]
   },
@@ -36,8 +36,10 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
     "prettier": "^3.8.3",
+    "tsx": "^4.21.0",
     "typescript": "^5",
     "typescript-eslint": "^8.59.0",
-    "vitest": "^3"
+    "vitest": "^3",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

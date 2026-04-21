@@ -2,5 +2,5 @@
   /* Block comment */
   "version": 1,
   "project": { "name": "test" },
-  "services": [{ "name": "api", "root": "." }]
+  "services": [{ "name": "api", "root": "." }],
 }

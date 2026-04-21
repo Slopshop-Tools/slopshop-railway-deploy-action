@@ -1,5 +1,5 @@
 {
   "version": 1,
   "project": { "name": "test" },
-  "services": [{ "name": "api" }]
+  "services": [{ "name": "api" }],
 }

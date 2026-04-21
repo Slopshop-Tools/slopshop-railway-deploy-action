@@ -2,17 +2,15 @@
   // Full valid config with all features
   "version": 1,
   "project": { "name": "my-app" },
-  "databases": [
-    { "name": "postgres", "type": "postgres" }
-  ],
+  "databases": [{ "name": "postgres", "type": "postgres" }],
   "services": [
     {
       "name": "api",
       "root": "apps/api",
       "variables": {
         "DATABASE_URL": "${{postgres.DATABASE_URL}}",
-        "NODE_ENV": "production"
-      }
-    }
-  ]
+        "NODE_ENV": "production",
+      },
+    },
+  ],
 }

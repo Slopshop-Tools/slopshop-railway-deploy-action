@@ -1,9 +1,11 @@
 {
   "version": 1,
   "project": { "name": "test" },
-  "services": [{
-    "name": "api",
-    "root": ".",
-    "variables": { "PORT": 3000 }
-  }]
+  "services": [
+    {
+      "name": "api",
+      "root": ".",
+      "variables": { "PORT": 3000 },
+    },
+  ],
 }

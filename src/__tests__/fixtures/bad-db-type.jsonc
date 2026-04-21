@@ -1,5 +1,5 @@
 {
   "version": 1,
   "project": { "name": "test" },
-  "databases": [{ "name": "db", "type": "sqlite" }]
+  "databases": [{ "name": "db", "type": "sqlite" }],
 }

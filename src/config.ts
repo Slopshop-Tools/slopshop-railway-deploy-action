@@ -23,7 +23,7 @@ const ServiceSchema = z.object({
   variables: z.record(z.string(), z.string()).optional(),
 });
 
-const ConfigSchema = z.object({
+export const ConfigSchema = z.object({
   version: z
     .number()
     .refine(
