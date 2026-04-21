@@ -1,0 +1,6 @@
+{
+  /* Block comment */
+  "version": 1,
+  "project": { "name": "test" },
+  "services": [{ "name": "api", "root": "." }]
+}
