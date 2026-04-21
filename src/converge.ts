@@ -16,13 +16,18 @@ import {
   addService,
   createProject,
   deploy,
+  ensureDomain,
   findProject,
   findService,
   linkProject,
   setVariable,
 } from './railway.js';
 
-export async function converge(config: Config, repoRoot: string): Promise<void> {
+export interface ConvergeResult {
+  services: Array<{ name: string; url: string }>;
+}
+
+export async function converge(config: Config, repoRoot: string): Promise<ConvergeResult> {
   // Step 1: Ensure project exists
   core.startGroup(`Ensuring project '${config.project.name}' exists`);
 
@@ -100,5 +105,19 @@ export async function converge(config: Config, repoRoot: string): Promise<void> 
 
   core.endGroup();
 
+  // Step 6: Ensure public domains and collect URLs
+  core.startGroup('Ensuring service domains');
+
+  const services: ConvergeResult['services'] = [];
+
+  for (const svc of config.services) {
+    const url = await ensureDomain(svc.name);
+    core.info(`Service '${svc.name}' URL: ${url}`);
+    services.push({ name: svc.name, url });
+  }
+
+  core.endGroup();
+
   core.info('Deployment complete!');
+  return { services };
 }

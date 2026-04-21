@@ -43,7 +43,18 @@ async function run(): Promise<void> {
     core.info(`Databases: ${dbNames !== '' ? dbNames : 'none'}`);
     core.info(`Services: ${svcNames !== '' ? svcNames : 'none'}`);
 
-    await converge(config, repoRoot);
+    const result = await converge(config, repoRoot);
+
+    // Set outputs for each service URL (keyed by service name)
+    for (const svc of result.services) {
+      core.setOutput(`${svc.name}_url`, svc.url);
+    }
+
+    // Convenience: if there's exactly one service, also set a generic `service_url`
+    const firstService = result.services[0];
+    if (result.services.length === 1 && firstService != null) {
+      core.setOutput('service_url', firstService.url);
+    }
   } catch (error) {
     if (error instanceof Error) {
       core.setFailed(error.message);

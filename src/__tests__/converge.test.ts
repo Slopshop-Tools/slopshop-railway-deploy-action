@@ -11,6 +11,7 @@ const mockAddDatabase = vi.fn();
 const mockAddService = vi.fn();
 const mockSetVariable = vi.fn();
 const mockDeploy = vi.fn();
+const mockEnsureDomain = vi.fn();
 
 vi.mock('../railway.js', () => ({
   findProject: (...args: unknown[]) => mockFindProject(...args),
@@ -21,6 +22,7 @@ vi.mock('../railway.js', () => ({
   addService: (...args: unknown[]) => mockAddService(...args),
   setVariable: (...args: unknown[]) => mockSetVariable(...args),
   deploy: (...args: unknown[]) => mockDeploy(...args),
+  ensureDomain: (...args: unknown[]) => mockEnsureDomain(...args),
 }));
 
 // Mock @actions/core so convergence doesn't try to write GitHub Actions output
@@ -50,6 +52,10 @@ const BASE_CONFIG: Config = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: ensureDomain returns a URL based on the service name
+  mockEnsureDomain.mockImplementation((name: string) =>
+    Promise.resolve(`https://${name}-production-abc123.up.railway.app`)
+  );
 });
 
 describe('converge — fresh project (nothing exists)', () => {

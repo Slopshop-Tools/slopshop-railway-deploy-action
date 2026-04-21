@@ -139,6 +139,27 @@ export async function setVariable(serviceName: string, key: string, value: strin
 }
 
 // ============================================================================
+// Domain operations
+// ============================================================================
+
+/**
+ * Get the public domain for a service, generating one if none exists.
+ * Railway's `domain` command returns the domain or creates one on first call.
+ */
+export async function ensureDomain(serviceName: string): Promise<string> {
+  const result = await getExecOutput('railway', ['domain', '--service', serviceName], {
+    silent: true,
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(`railway domain --service ${serviceName} failed: ${result.stderr}`);
+  }
+
+  // The domain command outputs the URL (e.g., "https://api-production-a1b2.up.railway.app")
+  return result.stdout.trim();
+}
+
+// ============================================================================
 // Deploy operations
 // ============================================================================
 

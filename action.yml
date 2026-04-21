@@ -11,6 +11,12 @@ inputs:
     required: false
     default: 'railway-deploy.jsonc'
 
+outputs:
+  service_url:
+    description: 'Public URL of the deployed service (set when config has exactly one service)'
+  api_url:
+    description: 'Public URL of the service named "api" (set as {name}_url for each service)'
+
 runs:
   using: 'node24'
   main: 'dist/index.js'
