@@ -100,7 +100,7 @@ export async function converge(config: Config, repoRoot: string): Promise<Conver
   for (const svc of config.services) {
     const svcRoot = resolve(repoRoot, svc.root);
     core.info(`Deploying '${svc.name}' from ${svcRoot}...`);
-    await deploy(svc.name, svcRoot);
+    await deploy(svc.name, repoRoot, svcRoot);
   }
 
   core.endGroup();

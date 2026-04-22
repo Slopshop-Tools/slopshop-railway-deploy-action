@@ -33719,12 +33719,13 @@ async function ensureDomain(serviceName) {
 // Deploy operations
 // ============================================================================
 /**
- * Deploy a service from a local directory.
- * Uses --detach so the command returns immediately.
+ * Deploy a service from the repo root.
+ * Uploads the entire repo so monorepo build commands (e.g. cd ../..) work.
+ * The service's railway.toml in rootDir controls the build/start commands.
  */
-async function deploy(serviceName, rootDir) {
-    await (0,exec.exec)('railway', ['up', '--service', serviceName, '--detach'], {
-        cwd: rootDir,
+async function deploy(serviceName, repoRoot, serviceRoot) {
+    await (0,exec.exec)('railway', ['up', '--service', serviceName, '--detach', serviceRoot], {
+        cwd: repoRoot,
     });
 }
 
@@ -33797,7 +33798,7 @@ async function converge(config, repoRoot) {
     for (const svc of config.services) {
         const svcRoot = (0,external_node_path_namespaceObject.resolve)(repoRoot, svc.root);
         core.info(`Deploying '${svc.name}' from ${svcRoot}...`);
-        await deploy(svc.name, svcRoot);
+        await deploy(svc.name, repoRoot, svcRoot);
     }
     core.endGroup();
     // Step 6: Ensure public domains and collect URLs

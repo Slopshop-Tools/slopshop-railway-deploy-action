@@ -186,11 +186,16 @@ export async function ensureDomain(serviceName: string): Promise<string> {
 // ============================================================================
 
 /**
- * Deploy a service from a local directory.
- * Uses --detach so the command returns immediately.
+ * Deploy a service from the repo root.
+ * Uploads the entire repo so monorepo build commands (e.g. cd ../..) work.
+ * The service's railway.toml in rootDir controls the build/start commands.
  */
-export async function deploy(serviceName: string, rootDir: string): Promise<void> {
-  await exec('railway', ['up', '--service', serviceName, '--detach'], {
-    cwd: rootDir,
+export async function deploy(
+  serviceName: string,
+  repoRoot: string,
+  serviceRoot: string
+): Promise<void> {
+  await exec('railway', ['up', '--service', serviceName, '--detach', serviceRoot], {
+    cwd: repoRoot,
   });
 }
