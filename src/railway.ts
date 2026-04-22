@@ -126,7 +126,8 @@ export async function getServices(): Promise<RailwayService[]> {
  */
 export async function findService(name: string): Promise<RailwayService | null> {
   const services = await getServices();
-  return services.find((s) => s.name === name) ?? null;
+  const lower = name.toLowerCase();
+  return services.find((s) => s.name.toLowerCase() === lower) ?? null;
 }
 
 /**
@@ -187,16 +188,12 @@ export async function ensureDomain(serviceName: string): Promise<string> {
 
 /**
  * Deploy a service from the repo root.
- * Uploads the entire repo so monorepo build commands (e.g. cd ../..) work.
- * The service's railway.toml in rootDir controls the build/start commands.
+ * Uploads the entire repo so monorepo build commands work.
+ * The railway.toml at the repo root controls build/start commands.
  * Waits for the build to complete so CI fails on build errors.
  */
-export async function deploy(
-  serviceName: string,
-  repoRoot: string,
-  serviceRoot: string
-): Promise<void> {
-  await exec('railway', ['up', '--service', serviceName, serviceRoot], {
+export async function deploy(serviceName: string, repoRoot: string): Promise<void> {
+  await exec('railway', ['up', '--service', serviceName], {
     cwd: repoRoot,
   });
 }

@@ -6,8 +6,6 @@
  * this multiple times produces the same result.
  */
 
-import { resolve } from 'node:path';
-
 import * as core from '@actions/core';
 
 import type { Config } from './config.js';
@@ -98,9 +96,8 @@ export async function converge(config: Config, repoRoot: string): Promise<Conver
   core.startGroup('Deploying services');
 
   for (const svc of config.services) {
-    const svcRoot = resolve(repoRoot, svc.root);
-    core.info(`Deploying '${svc.name}' from ${svcRoot}...`);
-    await deploy(svc.name, repoRoot, svcRoot);
+    core.info(`Deploying '${svc.name}' from ${repoRoot}...`);
+    await deploy(svc.name, repoRoot);
   }
 
   core.endGroup();

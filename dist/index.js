@@ -33669,7 +33669,8 @@ async function getServices() {
  */
 async function findService(name) {
     const services = await getServices();
-    return services.find((s) => s.name === name) ?? null;
+    const lower = name.toLowerCase();
+    return services.find((s) => s.name.toLowerCase() === lower) ?? null;
 }
 /**
  * Add a database service with an explicit name.
@@ -33720,12 +33721,12 @@ async function ensureDomain(serviceName) {
 // ============================================================================
 /**
  * Deploy a service from the repo root.
- * Uploads the entire repo so monorepo build commands (e.g. cd ../..) work.
- * The service's railway.toml in rootDir controls the build/start commands.
+ * Uploads the entire repo so monorepo build commands work.
+ * The railway.toml at the repo root controls build/start commands.
  * Waits for the build to complete so CI fails on build errors.
  */
-async function deploy(serviceName, repoRoot, serviceRoot) {
-    await (0,exec.exec)('railway', ['up', '--service', serviceName, serviceRoot], {
+async function deploy(serviceName, repoRoot) {
+    await (0,exec.exec)('railway', ['up', '--service', serviceName], {
         cwd: repoRoot,
     });
 }
@@ -33738,7 +33739,6 @@ async function deploy(serviceName, repoRoot, serviceRoot) {
  * infrastructure to match. Every operation is idempotent — running
  * this multiple times produces the same result.
  */
-
 
 
 async function converge(config, repoRoot) {
@@ -33797,9 +33797,8 @@ async function converge(config, repoRoot) {
     // Step 5: Deploy services
     core.startGroup('Deploying services');
     for (const svc of config.services) {
-        const svcRoot = (0,external_node_path_namespaceObject.resolve)(repoRoot, svc.root);
-        core.info(`Deploying '${svc.name}' from ${svcRoot}...`);
-        await deploy(svc.name, repoRoot, svcRoot);
+        core.info(`Deploying '${svc.name}' from ${repoRoot}...`);
+        await deploy(svc.name, repoRoot);
     }
     core.endGroup();
     // Step 6: Ensure public domains and collect URLs
