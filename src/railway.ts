@@ -251,16 +251,22 @@ export async function createDatabase(
     }
   );
 
-  // Find the newly created service
-  const services = await getServices(projectId);
-  const created = services.find((s) => s.name === name);
-  if (created == null) {
-    throw new Error(
-      `Database '${name}' was deployed via template but the service was not found in the project`
-    );
+  // Poll for the newly created service (template deploy is async)
+  const maxAttempts = 15;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const services = await getServices(projectId);
+    const created = services.find((s) => s.name === name);
+    if (created != null) {
+      return created;
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
   }
 
-  return created;
+  throw new Error(
+    `Database '${name}' was deployed via template but the service did not appear after ${maxAttempts} attempts`
+  );
 }
 
 // ============================================================================
