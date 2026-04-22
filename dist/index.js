@@ -33833,7 +33833,9 @@ async function converge(config, repoRoot, configPath, commitAndPush) {
     const knownNames = new Set(config.services.map((s) => s.name));
     const unrecognized = allServices.filter((s) => !knownIds.has(s.id) && !knownNames.has(s.name));
     if (unrecognized.length > 0) {
-        const list = unrecognized.map((s) => `  - ${s.name} (${s.id})`).join('\n');
+        const list = unrecognized
+            .map((s) => `  - ${s.name} (${s.id})\n    https://railway.com/project/${project.id}/service/${s.id}`)
+            .join('\n');
         throw new Error(`Unrecognized services found in Railway that are not in the deploy config:\n${list}\n\n` +
             `This can happen if a previous deploy created a resource but failed before saving its ID.\n` +
             `Either add the railwayId to your config to adopt it, or delete it from the Railway dashboard.`);
