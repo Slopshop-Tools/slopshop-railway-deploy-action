@@ -21,6 +21,7 @@ const DatabaseSchema = z.object({
 const ServiceSchema = z.object({
   name: z.string().min(1),
   root: z.string().min(1),
+  railwayId: z.string().optional(),
   variables: z.record(z.string(), z.string()).optional(),
 });
 
@@ -34,6 +35,7 @@ export const ConfigSchema = z.object({
     ),
   project: z.object({
     name: z.string().min(1),
+    railwayId: z.string().optional(),
   }),
   databases: z.array(DatabaseSchema).default([]),
   services: z.array(ServiceSchema).default([]),

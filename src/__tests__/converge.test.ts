@@ -2,30 +2,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Config } from '../config.js';
 
-// Mock the railway CLI wrapper
-const mockFindProject = vi.fn();
+// Mock the railway API/CLI wrapper
+const mockGetProject = vi.fn();
 const mockCreateProject = vi.fn();
-const mockLinkProject = vi.fn();
+const mockRenameProject = vi.fn();
+const mockGetProductionEnvironmentId = vi.fn();
 const mockGetServices = vi.fn();
-const mockFindService = vi.fn();
-const mockFindServiceById = vi.fn();
-const mockCreateDatabase = vi.fn();
+const mockCreateService = vi.fn();
 const mockRenameService = vi.fn();
-const mockAddService = vi.fn();
+const mockCreateDatabase = vi.fn();
 const mockSetVariable = vi.fn();
 const mockDeploy = vi.fn();
 const mockEnsureDomain = vi.fn();
 
 vi.mock('../railway.js', () => ({
-  findProject: (...args: unknown[]) => mockFindProject(...args),
+  getProject: (...args: unknown[]) => mockGetProject(...args),
   createProject: (...args: unknown[]) => mockCreateProject(...args),
-  linkProject: (...args: unknown[]) => mockLinkProject(...args),
+  renameProject: (...args: unknown[]) => mockRenameProject(...args),
+  getProductionEnvironmentId: (...args: unknown[]) => mockGetProductionEnvironmentId(...args),
   getServices: (...args: unknown[]) => mockGetServices(...args),
-  findService: (...args: unknown[]) => mockFindService(...args),
-  findServiceById: (...args: unknown[]) => mockFindServiceById(...args),
-  createDatabase: (...args: unknown[]) => mockCreateDatabase(...args),
+  createService: (...args: unknown[]) => mockCreateService(...args),
   renameService: (...args: unknown[]) => mockRenameService(...args),
-  addService: (...args: unknown[]) => mockAddService(...args),
+  createDatabase: (...args: unknown[]) => mockCreateDatabase(...args),
   setVariable: (...args: unknown[]) => mockSetVariable(...args),
   deploy: (...args: unknown[]) => mockDeploy(...args),
   ensureDomain: (...args: unknown[]) => mockEnsureDomain(...args),
@@ -48,6 +46,7 @@ vi.mock('../config.js', async (importOriginal) => {
 import { converge } from '../converge.js';
 
 const mockCommitAndPush = vi.fn();
+const WORKSPACE_ID = 'ws_test';
 
 const BASE_CONFIG: Config = {
   version: 1,
@@ -69,118 +68,209 @@ function cloneConfig(config: Config): Config {
   return JSON.parse(JSON.stringify(config)) as Config;
 }
 
-function configWithDbId(railwayId: string): Config {
+function configWithIds(opts: { projectId?: string; dbId?: string; serviceId?: string }): Config {
   const config = cloneConfig(BASE_CONFIG);
-  const db = config.databases[0];
-  if (db != null) {
-    db.railwayId = railwayId;
+  if (opts.projectId != null) {
+    config.project.railwayId = opts.projectId;
+  }
+  if (opts.dbId != null && config.databases[0] != null) {
+    config.databases[0].railwayId = opts.dbId;
+  }
+  if (opts.serviceId != null && config.services[0] != null) {
+    config.services[0].railwayId = opts.serviceId;
   }
   return config;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default: no services exist (fresh project)
+  mockGetProductionEnvironmentId.mockResolvedValue('env_prod');
   mockGetServices.mockResolvedValue([]);
-  mockEnsureDomain.mockImplementation((name: string) =>
-    Promise.resolve(`https://${name}-production-abc123.up.railway.app`)
+  mockEnsureDomain.mockImplementation((_pId: string, _eId: string, sId: string) =>
+    Promise.resolve(`https://${sId}-production.up.railway.app`)
   );
 });
 
 describe('converge — fresh project (nothing exists)', () => {
   beforeEach(() => {
-    mockFindProject.mockResolvedValue(null);
     mockCreateProject.mockResolvedValue({ id: 'proj_new', name: 'test-project' });
-    mockFindService.mockResolvedValue(null);
-    mockCreateDatabase.mockResolvedValue({ serviceId: 'db_new', serviceName: 'Postgres-xYz' });
+    mockCreateDatabase.mockResolvedValue({ id: 'db_new', name: 'postgres' });
+    mockCreateService.mockResolvedValue({ id: 'svc_new', name: 'api' });
   });
 
-  it('creates the project', async () => {
-    await converge(cloneConfig(BASE_CONFIG), '/repo', '/repo/config.jsonc', mockCommitAndPush);
-
-    expect(mockCreateProject).toHaveBeenCalledWith('test-project');
-    expect(mockLinkProject).toHaveBeenCalledWith('proj_new');
-  });
-
-  it('creates the database, saves ID, and renames', async () => {
+  it('creates the project and saves ID', async () => {
     const config = cloneConfig(BASE_CONFIG);
-    await converge(config, '/repo', '/repo/config.jsonc', mockCommitAndPush);
+    await converge(config, WORKSPACE_ID, '/repo', '/repo/config.jsonc', mockCommitAndPush);
 
-    expect(mockCreateDatabase).toHaveBeenCalledWith('postgres');
+    expect(mockCreateProject).toHaveBeenCalledWith('test-project', WORKSPACE_ID);
+    expect(config.project.railwayId).toBe('proj_new');
     expect(mockSaveConfig).toHaveBeenCalled();
-    expect(mockCommitAndPush).toHaveBeenCalled();
-    expect(mockRenameService).toHaveBeenCalledWith('db_new', 'postgres');
+    expect(mockCommitAndPush).toHaveBeenCalledWith(expect.stringContaining('project'));
+  });
+
+  it('creates the database with desired name and saves ID', async () => {
+    const config = cloneConfig(BASE_CONFIG);
+    await converge(config, WORKSPACE_ID, '/repo', '/repo/config.jsonc', mockCommitAndPush);
+
+    expect(mockCreateDatabase).toHaveBeenCalledWith('proj_new', 'env_prod', 'postgres', 'postgres');
     expect(config.databases[0]?.railwayId).toBe('db_new');
   });
 
-  it('creates the service', async () => {
-    await converge(cloneConfig(BASE_CONFIG), '/repo', '/repo/config.jsonc', mockCommitAndPush);
+  it('creates the service and saves ID', async () => {
+    const config = cloneConfig(BASE_CONFIG);
+    await converge(config, WORKSPACE_ID, '/repo', '/repo/config.jsonc', mockCommitAndPush);
 
-    expect(mockAddService).toHaveBeenCalledWith('api');
+    expect(mockCreateService).toHaveBeenCalledWith('proj_new', 'api');
+    expect(config.services[0]?.railwayId).toBe('svc_new');
   });
 
-  it('sets variables on the service', async () => {
-    await converge(cloneConfig(BASE_CONFIG), '/repo', '/repo/config.jsonc', mockCommitAndPush);
+  it('sets variables with service ID', async () => {
+    await converge(
+      cloneConfig(BASE_CONFIG),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
 
     expect(mockSetVariable).toHaveBeenCalledWith(
-      'api',
+      'proj_new',
+      'env_prod',
+      'svc_new',
       'DATABASE_URL',
       '${{postgres.DATABASE_URL}}'
     );
-    expect(mockSetVariable).toHaveBeenCalledWith('api', 'NODE_ENV', 'production');
+    expect(mockSetVariable).toHaveBeenCalledWith(
+      'proj_new',
+      'env_prod',
+      'svc_new',
+      'NODE_ENV',
+      'production'
+    );
   });
 
-  it('deploys the service from the repo root', async () => {
-    await converge(cloneConfig(BASE_CONFIG), '/repo', '/repo/config.jsonc', mockCommitAndPush);
+  it('deploys with explicit project/environment/service IDs', async () => {
+    await converge(
+      cloneConfig(BASE_CONFIG),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
 
-    expect(mockDeploy).toHaveBeenCalledWith('api', '/repo');
+    expect(mockDeploy).toHaveBeenCalledWith('proj_new', 'env_prod', 'svc_new', '/repo');
   });
 });
 
-describe('converge — existing project with provisioned database', () => {
+describe('converge — existing project with all IDs', () => {
   beforeEach(() => {
-    mockFindProject.mockResolvedValue({ id: 'proj_existing', name: 'test-project' });
+    mockGetProject.mockResolvedValue({ id: 'proj_existing', name: 'test-project' });
     mockGetServices.mockResolvedValue([
       { id: 'db_existing', name: 'postgres' },
       { id: 'svc_existing', name: 'api' },
     ]);
-    mockFindService.mockResolvedValue({ id: 'svc_existing', name: 'api' });
-    mockFindServiceById.mockResolvedValue({ id: 'db_existing', name: 'postgres' });
   });
 
-  it('does not create the project', async () => {
-    await converge(configWithDbId('db_existing'), '/repo', '/repo/config.jsonc', mockCommitAndPush);
+  it('does not create anything', async () => {
+    await converge(
+      configWithIds({ projectId: 'proj_existing', dbId: 'db_existing', serviceId: 'svc_existing' }),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
 
     expect(mockCreateProject).not.toHaveBeenCalled();
-    expect(mockLinkProject).toHaveBeenCalledWith('proj_existing');
-  });
-
-  it('does not create database or service that already exist', async () => {
-    await converge(configWithDbId('db_existing'), '/repo', '/repo/config.jsonc', mockCommitAndPush);
-
     expect(mockCreateDatabase).not.toHaveBeenCalled();
-    expect(mockAddService).not.toHaveBeenCalled();
+    expect(mockCreateService).not.toHaveBeenCalled();
   });
 
-  it('does not rename if name already matches', async () => {
-    await converge(configWithDbId('db_existing'), '/repo', '/repo/config.jsonc', mockCommitAndPush);
+  it('does not rename if names match', async () => {
+    await converge(
+      configWithIds({ projectId: 'proj_existing', dbId: 'db_existing', serviceId: 'svc_existing' }),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
 
+    expect(mockRenameProject).not.toHaveBeenCalled();
     expect(mockRenameService).not.toHaveBeenCalled();
   });
 
-  it('renames if name does not match (retry case)', async () => {
-    mockFindServiceById.mockResolvedValue({ id: 'db_existing', name: 'Postgres-xYz' });
-    await converge(configWithDbId('db_existing'), '/repo', '/repo/config.jsonc', mockCommitAndPush);
+  it('renames project if name does not match', async () => {
+    mockGetProject.mockResolvedValue({ id: 'proj_existing', name: 'old-name' });
+
+    await converge(
+      configWithIds({ projectId: 'proj_existing', dbId: 'db_existing', serviceId: 'svc_existing' }),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
+
+    expect(mockRenameProject).toHaveBeenCalledWith('proj_existing', 'test-project');
+  });
+
+  it('renames database if name does not match', async () => {
+    mockGetServices.mockResolvedValue([
+      { id: 'db_existing', name: 'Postgres-xYz' },
+      { id: 'svc_existing', name: 'api' },
+    ]);
+
+    await converge(
+      configWithIds({ projectId: 'proj_existing', dbId: 'db_existing', serviceId: 'svc_existing' }),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
 
     expect(mockRenameService).toHaveBeenCalledWith('db_existing', 'postgres');
   });
 
-  it('fails if railwayId points to nonexistent service', async () => {
-    mockGetServices.mockResolvedValue([{ id: 'svc_existing', name: 'api' }]);
-    mockFindServiceById.mockResolvedValue(null);
+  it('renames service if name does not match', async () => {
+    mockGetServices.mockResolvedValue([
+      { id: 'db_existing', name: 'postgres' },
+      { id: 'svc_existing', name: 'old-api' },
+    ]);
+
+    await converge(
+      configWithIds({ projectId: 'proj_existing', dbId: 'db_existing', serviceId: 'svc_existing' }),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
+
+    expect(mockRenameService).toHaveBeenCalledWith('svc_existing', 'api');
+  });
+
+  it('fails if project railwayId points to nonexistent project', async () => {
+    mockGetProject.mockResolvedValue(null);
 
     await expect(
-      converge(configWithDbId('db_gone'), '/repo', '/repo/config.jsonc', mockCommitAndPush)
+      converge(
+        configWithIds({ projectId: 'proj_gone', dbId: 'db_existing', serviceId: 'svc_existing' }),
+        WORKSPACE_ID,
+        '/repo',
+        '/repo/config.jsonc',
+        mockCommitAndPush
+      )
+    ).rejects.toThrow(/no matching project exists/);
+  });
+
+  it('fails if database railwayId points to nonexistent service', async () => {
+    mockGetServices.mockResolvedValue([{ id: 'svc_existing', name: 'api' }]);
+
+    await expect(
+      converge(
+        configWithIds({ projectId: 'proj_existing', dbId: 'db_gone', serviceId: 'svc_existing' }),
+        WORKSPACE_ID,
+        '/repo',
+        '/repo/config.jsonc',
+        mockCommitAndPush
+      )
     ).rejects.toThrow(/no matching service exists/);
   });
 });
@@ -194,17 +284,22 @@ describe('converge — no databases, no variables', () => {
   };
 
   beforeEach(() => {
-    mockFindProject.mockResolvedValue(null);
     mockCreateProject.mockResolvedValue({ id: 'proj_min', name: 'minimal' });
-    mockFindService.mockResolvedValue(null);
+    mockCreateService.mockResolvedValue({ id: 'svc_min', name: 'worker' });
   });
 
   it('skips database and variable steps', async () => {
-    await converge(cloneConfig(minimalConfig), '/repo', '/repo/config.jsonc', mockCommitAndPush);
+    await converge(
+      cloneConfig(minimalConfig),
+      WORKSPACE_ID,
+      '/repo',
+      '/repo/config.jsonc',
+      mockCommitAndPush
+    );
 
     expect(mockCreateDatabase).not.toHaveBeenCalled();
     expect(mockSetVariable).not.toHaveBeenCalled();
-    expect(mockAddService).toHaveBeenCalledWith('worker');
-    expect(mockDeploy).toHaveBeenCalledWith('worker', '/repo');
+    expect(mockCreateService).toHaveBeenCalledWith('proj_min', 'worker');
+    expect(mockDeploy).toHaveBeenCalledWith('proj_min', 'env_prod', 'svc_min', '/repo');
   });
 });

@@ -6,6 +6,9 @@ inputs:
   token:
     description: 'Railway API token (account-level)'
     required: true
+  workspace:
+    description: 'Railway workspace ID'
+    required: true
   config:
     description: 'Path to railway-deploy.jsonc config file'
     required: false

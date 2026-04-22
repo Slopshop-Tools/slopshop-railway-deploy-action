@@ -1,0 +1,17 @@
+{
+  // Config with railwayId fields populated
+  "version": 1,
+  "project": { "name": "my-app", "railwayId": "proj-123" },
+  "databases": [{ "name": "postgres", "type": "postgres", "railwayId": "db-456" }],
+  "services": [
+    {
+      "name": "api",
+      "root": "apps/api",
+      "railwayId": "svc-789",
+      "variables": {
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "NODE_ENV": "production",
+      },
+    },
+  ],
+}

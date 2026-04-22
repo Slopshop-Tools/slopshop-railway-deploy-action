@@ -66,6 +66,23 @@ describe('loadConfig', () => {
     expect(config.services[0]?.variables).toBeUndefined();
   });
 
+  it('parses config with railwayId fields', () => {
+    const config = loadConfig(fixture('valid-with-ids.jsonc'));
+
+    expect(config.version).toBe(1);
+    expect(config.project.railwayId).toBe('proj-123');
+    expect(config.databases[0]?.railwayId).toBe('db-456');
+    expect(config.services[0]?.railwayId).toBe('svc-789');
+  });
+
+  it('allows railwayId to be omitted on project, databases, and services', () => {
+    const config = loadConfig(fixture('valid.jsonc'));
+
+    expect(config.project.railwayId).toBeUndefined();
+    expect(config.databases[0]?.railwayId).toBeUndefined();
+    expect(config.services[0]?.railwayId).toBeUndefined();
+  });
+
   it('throws on nonexistent file', () => {
     expect(() => loadConfig('/nonexistent/path.jsonc')).toThrow();
   });

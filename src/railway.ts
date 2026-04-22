@@ -1,56 +1,23 @@
 /**
- * Railway CLI and API wrapper.
+ * Railway API and CLI wrapper.
  *
- * CLI commands assume RAILWAY_API_TOKEN is set in the environment.
- * GraphQL API calls use the token directly via Authorization header.
+ * All operations use the Railway GraphQL API directly except deploy,
+ * which uses the CLI to upload code.
  */
 
 import * as core from '@actions/core';
-import { exec, getExecOutput } from '@actions/exec';
+import { exec } from '@actions/exec';
 
 const RAILWAY_API_URL = 'https://backboard.railway.com/graphql/v2';
 
-/**
- * Run a railway CLI command and return the JSON-parsed output.
- */
-async function railwayJson<T>(args: string[]): Promise<T> {
-  const result = await getExecOutput('railway', [...args, '--json'], {
-    silent: true,
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error(`railway ${args.join(' ')} failed: ${result.stderr}`);
-  }
-
-  return JSON.parse(result.stdout) as T;
-}
+// ============================================================================
+// GraphQL client
+// ============================================================================
 
 /**
- * Run a railway CLI command (no output parsing).
+ * Execute an authenticated GraphQL query/mutation against Railway's API.
  */
-async function railway(args: string[]): Promise<void> {
-  const exitCode = await exec('railway', args);
-  if (exitCode !== 0) {
-    throw new Error(`railway ${args.join(' ')} failed with exit code ${exitCode}`);
-  }
-}
-
-/**
- * Run a railway CLI command, tolerating failure (for idempotent operations).
- */
-async function railwaySafe(args: string[]): Promise<boolean> {
-  try {
-    const exitCode = await exec('railway', args, { silent: true });
-    return exitCode === 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Execute a GraphQL mutation/query against Railway's API.
- */
-async function railwayGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+async function gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
   const token = process.env.RAILWAY_API_TOKEN;
   if (token == null) {
     throw new Error('RAILWAY_API_TOKEN is not set');
@@ -78,42 +45,103 @@ async function railwayGraphql<T>(query: string, variables: Record<string, unknow
   return body.data;
 }
 
+/**
+ * Execute a public (unauthenticated) GraphQL query against Railway's API.
+ */
+async function gqlPublic<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+  const response = await fetch(RAILWAY_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  const body = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+
+  if (body.errors != null && body.errors.length > 0) {
+    throw new Error(`Railway API error: ${body.errors.map((e) => e.message).join(', ')}`);
+  }
+
+  if (body.data == null) {
+    throw new Error('Railway API returned no data');
+  }
+
+  return body.data;
+}
+
 // ============================================================================
 // Project operations
 // ============================================================================
 
-interface RailwayProject {
+export interface RailwayProject {
+  id: string;
+  name: string;
+}
+
+interface RailwayEnvironment {
   id: string;
   name: string;
 }
 
 /**
- * List all projects accessible to the current token.
+ * Get a project by ID.
  */
-export async function listProjects(): Promise<RailwayProject[]> {
-  return railwayJson<RailwayProject[]>(['list']);
+export async function getProject(id: string): Promise<RailwayProject | null> {
+  try {
+    const data = await gql<{ project: RailwayProject }>(
+      `query($id: String!) { project(id: $id) { id name } }`,
+      { id }
+    );
+    return data.project;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Find a project by name. Returns null if not found.
+ * Create a new project.
  */
-export async function findProject(name: string): Promise<RailwayProject | null> {
-  const projects = await listProjects();
-  return projects.find((p) => p.name === name) ?? null;
+export async function createProject(name: string, workspaceId: string): Promise<RailwayProject> {
+  const data = await gql<{ projectCreate: RailwayProject }>(
+    `mutation($input: ProjectCreateInput!) {
+      projectCreate(input: $input) { id name }
+    }`,
+    { input: { name, workspaceId } }
+  );
+  return data.projectCreate;
 }
 
 /**
- * Create a new project with the given name.
+ * Rename a project.
  */
-export async function createProject(name: string): Promise<RailwayProject> {
-  return railwayJson<RailwayProject>(['init', '--name', name]);
+export async function renameProject(id: string, name: string): Promise<void> {
+  await gql(
+    `mutation($id: String!, $input: ProjectUpdateInput!) {
+      projectUpdate(id: $id, input: $input) { id }
+    }`,
+    { id, input: { name } }
+  );
 }
 
 /**
- * Link the CLI to a project by ID so subsequent commands target it.
+ * Get the environments for a project. Returns the "production" environment ID.
  */
-export async function linkProject(projectId: string): Promise<void> {
-  await railway(['link', '--project', projectId]);
+export async function getProductionEnvironmentId(projectId: string): Promise<string> {
+  const data = await gql<{
+    project: { environments: { edges: Array<{ node: RailwayEnvironment }> } };
+  }>(
+    `query($id: String!) {
+      project(id: $id) {
+        environments { edges { node { id name } } }
+      }
+    }`,
+    { id: projectId }
+  );
+
+  const env = data.project.environments.edges.find((e) => e.node.name === 'production');
+  if (env == null) {
+    throw new Error(`No "production" environment found in project ${projectId}`);
+  }
+  return env.node.id;
 }
 
 // ============================================================================
@@ -126,97 +154,113 @@ export interface RailwayService {
 }
 
 /**
- * Get the list of services in the currently linked project.
- * Parses from `railway status --json`.
- *
- * Railway returns services in GraphQL relay format:
- *   { services: { edges: [{ node: { id, name } }] } }
+ * Get all services in a project.
  */
-export async function getServices(): Promise<RailwayService[]> {
-  try {
-    const status = await railwayJson<{
-      services?: { edges?: Array<{ node: RailwayService }> } | RailwayService[];
-    }>(['status']);
-
-    const raw = status.services;
-    if (raw == null) {
-      return [];
-    }
-    if (Array.isArray(raw)) {
-      return raw;
-    }
-    if (Array.isArray(raw.edges)) {
-      return raw.edges.map((e: { node: RailwayService }) => e.node);
-    }
-
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Find a service by exact name in the current project.
- */
-export async function findService(name: string): Promise<RailwayService | null> {
-  const services = await getServices();
-  return services.find((s) => s.name === name) ?? null;
-}
-
-/**
- * Find a service by Railway ID.
- */
-export async function findServiceById(id: string): Promise<RailwayService | null> {
-  const services = await getServices();
-  return services.find((s) => s.id === id) ?? null;
-}
-
-/**
- * Create a database service. Returns the service ID and Railway-assigned name.
- *
- * The Railway CLI may output interactive prompts before the JSON
- * (e.g. "> What do you need? Database"), so we extract the JSON
- * object from the output rather than parsing it directly.
- */
-export async function createDatabase(
-  type: string
-): Promise<{ serviceId: string; serviceName: string }> {
-  const result = await getExecOutput('railway', ['add', '--database', type, '--json'], {
-    silent: true,
-  });
-
-  if (result.exitCode !== 0) {
-    throw new Error(`railway add --database ${type} failed: ${result.stderr}`);
-  }
-
-  // Extract the JSON object from mixed output (prompts + JSON)
-  const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
-  if (jsonMatch == null) {
-    throw new Error(`Could not find JSON in railway add output: ${result.stdout}`);
-  }
-
-  return JSON.parse(jsonMatch[0]) as { serviceId: string; serviceName: string };
-}
-
-/**
- * Rename a service via Railway's GraphQL API.
- */
-export async function renameService(serviceId: string, newName: string): Promise<void> {
-  core.info(`Renaming service ${serviceId} to '${newName}'...`);
-
-  await railwayGraphql<{ serviceUpdate: { id: string; name: string } }>(
-    `mutation serviceUpdate($id: String!, $input: ServiceUpdateInput!) {
-      serviceUpdate(id: $id, input: $input) { id name }
+export async function getServices(projectId: string): Promise<RailwayService[]> {
+  const data = await gql<{
+    project: { services: { edges: Array<{ node: RailwayService }> } };
+  }>(
+    `query($id: String!) {
+      project(id: $id) {
+        services { edges { node { id name } } }
+      }
     }`,
-    { id: serviceId, input: { name: newName } }
+    { id: projectId }
+  );
+
+  return data.project.services.edges.map((e) => e.node);
+}
+
+/**
+ * Create an empty service with a name.
+ */
+export async function createService(projectId: string, name: string): Promise<RailwayService> {
+  const data = await gql<{ serviceCreate: RailwayService }>(
+    `mutation($input: ServiceCreateInput!) {
+      serviceCreate(input: $input) { id name }
+    }`,
+    { input: { projectId, name } }
+  );
+  return data.serviceCreate;
+}
+
+/**
+ * Rename a service.
+ */
+export async function renameService(serviceId: string, name: string): Promise<void> {
+  core.info(`Renaming service ${serviceId} to '${name}'...`);
+  await gql(
+    `mutation($id: String!, $input: ServiceUpdateInput!) {
+      serviceUpdate(id: $id, input: $input) { id }
+    }`,
+    { id: serviceId, input: { name } }
   );
 }
 
+// ============================================================================
+// Database (template) operations
+// ============================================================================
+
+interface TemplateDetail {
+  id: string;
+  serializedConfig: Record<string, unknown>;
+}
+
 /**
- * Add an empty service with a name.
+ * Create a database by deploying a Railway template (e.g. "postgres", "redis").
+ * Modifies the template's serializedConfig to set the desired service name.
+ * Returns the new service once it appears in the project.
  */
-export async function addService(name: string): Promise<void> {
-  await railway(['add', '--service', name]);
+export async function createDatabase(
+  projectId: string,
+  environmentId: string,
+  type: string,
+  name: string
+): Promise<RailwayService> {
+  // Fetch template details (public, no auth needed)
+  const data = await gqlPublic<{ template: TemplateDetail }>(
+    `query($code: String!) { template(code: $code) { id serializedConfig } }`,
+    { code: type }
+  );
+
+  const template = data.template;
+
+  // Modify the service name in the template config
+  const config = template.serializedConfig as {
+    services: Record<string, { name: string }>;
+  };
+  for (const key of Object.keys(config.services)) {
+    const svc = config.services[key];
+    if (svc != null) {
+      svc.name = name;
+    }
+  }
+
+  // Deploy the template
+  await gql(
+    `mutation($input: TemplateDeployV2Input!) {
+      templateDeployV2(input: $input) { projectId workflowId }
+    }`,
+    {
+      input: {
+        projectId,
+        environmentId,
+        templateId: template.id,
+        serializedConfig: config,
+      },
+    }
+  );
+
+  // Find the newly created service
+  const services = await getServices(projectId);
+  const created = services.find((s) => s.name === name);
+  if (created == null) {
+    throw new Error(
+      `Database '${name}' was deployed via template but the service was not found in the project`
+    );
+  }
+
+  return created;
 }
 
 // ============================================================================
@@ -227,8 +271,27 @@ export async function addService(name: string): Promise<void> {
  * Set a variable on a service. Uses Railway's reference syntax
  * (e.g., ${{postgres.DATABASE_URL}}) which Railway resolves at runtime.
  */
-export async function setVariable(serviceName: string, key: string, value: string): Promise<void> {
-  await railwaySafe(['variable', 'set', `${key}=${value}`, '--service', serviceName]);
+export async function setVariable(
+  projectId: string,
+  environmentId: string,
+  serviceId: string,
+  key: string,
+  value: string
+): Promise<void> {
+  await gql(
+    `mutation($input: VariableUpsertInput!) {
+      variableUpsert(input: $input)
+    }`,
+    {
+      input: {
+        projectId,
+        environmentId,
+        serviceId,
+        name: key,
+        value,
+      },
+    }
+  );
 }
 
 // ============================================================================
@@ -236,25 +299,85 @@ export async function setVariable(serviceName: string, key: string, value: strin
 // ============================================================================
 
 /**
- * Get the public domain for a service, generating one if none exists.
- * Railway's `domain` command returns the domain or creates one on first call.
+ * Ensure a service has a public domain. Creates one if none exists.
+ * Returns the domain URL.
  */
-export async function ensureDomain(serviceName: string): Promise<string> {
-  const result = await getExecOutput('railway', ['domain', '--service', serviceName], {
-    silent: true,
-  });
+export async function ensureDomain(
+  projectId: string,
+  environmentId: string,
+  serviceId: string
+): Promise<string> {
+  // Check for existing domains
+  const data = await gql<{
+    project: {
+      services: {
+        edges: Array<{
+          node: {
+            id: string;
+            serviceInstances: {
+              edges: Array<{
+                node: {
+                  domains: {
+                    serviceDomains: Array<{ domain: string }>;
+                  };
+                };
+              }>;
+            };
+          };
+        }>;
+      };
+    };
+  }>(
+    `query($projectId: String!, $envId: String!) {
+      project(id: $projectId) {
+        services {
+          edges {
+            node {
+              id
+              serviceInstances(environmentId: $envId) {
+                edges {
+                  node {
+                    domains {
+                      serviceDomains { domain }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }`,
+    { projectId, envId: environmentId }
+  );
 
-  if (result.exitCode !== 0) {
-    throw new Error(`railway domain --service ${serviceName} failed: ${result.stderr}`);
+  // Find the service and check for existing domain
+  for (const svcEdge of data.project.services.edges) {
+    if (svcEdge.node.id === serviceId) {
+      const instance = svcEdge.node.serviceInstances.edges[0];
+      const existing = instance?.node.domains.serviceDomains[0];
+      if (existing != null) {
+        return `https://${existing.domain}`;
+      }
+    }
   }
 
-  // Railway may print informational text around the URL (e.g. "Service Domain created:\n🚀 https://...").
-  // Extract the first https:// URL from the output.
-  const urlMatch = result.stdout.match(/https:\/\/\S+/);
-  if (urlMatch == null) {
-    throw new Error(`Could not find URL in railway domain output: ${result.stdout}`);
-  }
-  return urlMatch[0];
+  // No domain exists — create one
+  const createData = await gql<{
+    serviceDomainCreate: { domain: string };
+  }>(
+    `mutation($input: ServiceDomainCreateInput!) {
+      serviceDomainCreate(input: $input) { domain }
+    }`,
+    {
+      input: {
+        serviceId,
+        environmentId,
+      },
+    }
+  );
+
+  return `https://${createData.serviceDomainCreate.domain}`;
 }
 
 // ============================================================================
@@ -262,13 +385,21 @@ export async function ensureDomain(serviceName: string): Promise<string> {
 // ============================================================================
 
 /**
- * Deploy a service from the repo root.
- * Uploads the entire repo so monorepo build commands work.
- * The railway.toml at the repo root controls build/start commands.
- * Waits for the build to complete so CI fails on build errors.
+ * Deploy a service by uploading code via the Railway CLI.
+ * This is the only CLI call — everything else uses the API.
  */
-export async function deploy(serviceName: string, repoRoot: string): Promise<void> {
-  await exec('railway', ['up', '--service', serviceName], {
-    cwd: repoRoot,
-  });
+export async function deploy(
+  projectId: string,
+  environmentId: string,
+  serviceId: string,
+  repoRoot: string
+): Promise<void> {
+  const exitCode = await exec(
+    'railway',
+    ['up', '--project', projectId, '--environment', environmentId, '--service', serviceId],
+    { cwd: repoRoot }
+  );
+  if (exitCode !== 0) {
+    throw new Error(`railway up failed with exit code ${exitCode}`);
+  }
 }

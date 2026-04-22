@@ -2,14 +2,14 @@
  * GitHub Action entrypoint.
  *
  * Reads the config file, validates it, and converges Railway infrastructure.
- * If new resources are provisioned (databases), the config is updated with
+ * If new resources are provisioned, the config is updated with
  * Railway-assigned IDs and committed back to the repo immediately.
  */
 
 import { resolve } from 'node:path';
 
 import * as core from '@actions/core';
-import { exec, getExecOutput } from '@actions/exec';
+import { exec } from '@actions/exec';
 
 import { loadConfig } from './config.js';
 import { converge } from './converge.js';
@@ -22,12 +22,11 @@ async function installRailwayCli(): Promise<void> {
 
 /**
  * Verify that git push will work before creating any resources.
- * Uses the GitHub API to check repository permissions.
  */
 async function verifyGitPushAccess(): Promise<void> {
   core.startGroup('Verifying git push access');
 
-  // Create an empty commit and try to push it to verify write access
+  const { getExecOutput } = await import('@actions/exec');
   const pushResult = await getExecOutput('git', ['push', '--dry-run'], {
     silent: true,
     ignoreReturnCode: true,
@@ -42,7 +41,6 @@ async function verifyGitPushAccess(): Promise<void> {
 
   core.info('Git push access verified');
 
-  // Configure git for commits
   await exec('git', ['config', 'user.name', 'github-actions[bot]']);
   await exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
 
@@ -61,19 +59,19 @@ async function commitAndPush(configPath: string, message: string): Promise<void>
 async function run(): Promise<void> {
   try {
     const token = core.getInput('token', { required: true });
+    const workspaceId = core.getInput('workspace', { required: true });
     const configInput = core.getInput('config');
     const configPath = configInput !== '' ? configInput : 'railway-deploy.jsonc';
 
-    // Set the token for the Railway CLI
+    // Set the token for the Railway CLI (used only by `railway up`)
     core.exportVariable('RAILWAY_API_TOKEN', token);
-    // Suppress interactive prompts in the Railway CLI
-    core.exportVariable('CI', 'true');
     // Mask it from logs
     core.setSecret(token);
 
     // Verify push access before doing anything destructive
     await verifyGitPushAccess();
 
+    // Only needed for `railway up`
     await installRailwayCli();
 
     const repoRoot = process.env.GITHUB_WORKSPACE ?? process.cwd();
@@ -88,8 +86,12 @@ async function run(): Promise<void> {
     core.info(`Databases: ${dbNames !== '' ? dbNames : 'none'}`);
     core.info(`Services: ${svcNames !== '' ? svcNames : 'none'}`);
 
-    const result = await converge(config, repoRoot, fullConfigPath, (message: string) =>
-      commitAndPush(configPath, message)
+    const result = await converge(
+      config,
+      workspaceId,
+      repoRoot,
+      fullConfigPath,
+      (message: string) => commitAndPush(configPath, message)
     );
 
     // Set outputs for each service URL (keyed by service name)
