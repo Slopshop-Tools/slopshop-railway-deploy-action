@@ -39,7 +39,8 @@ function buildNameMapping(databases: DatabaseConfig[]): Map<string, string> {
   const mapping = new Map<string, string>();
   for (const db of databases) {
     if (db.railwayServiceName != null) {
-      mapping.set(db.name, db.railwayServiceName);
+      // Store lowercase key so lookups are case-insensitive
+      mapping.set(db.name.toLowerCase(), db.railwayServiceName);
     }
   }
   return mapping;
@@ -48,10 +49,11 @@ function buildNameMapping(databases: DatabaseConfig[]): Map<string, string> {
 /**
  * Rewrite Railway variable references using the name mapping.
  * Replaces ${{configName.VAR}} with ${{actualName.VAR}}.
+ * Lookup is case-insensitive so ${{postgres.X}} and ${{Postgres.X}} both match.
  */
 function rewriteVariableRef(value: string, nameMapping: Map<string, string>): string {
   return value.replace(/\$\{\{(\w+)\.([\w.]+)\}\}/g, (_match, name: string, rest: string) => {
-    const actual = nameMapping.get(name);
+    const actual = nameMapping.get(name.toLowerCase());
     if (actual != null) {
       return '${{' + actual + '.' + rest + '}}';
     }
@@ -95,31 +97,44 @@ export async function converge(config: Config, repoRoot: string): Promise<Conver
         `Database '${db.name}' already provisioned: ${db.railwayServiceName} (${db.railwayId})`
       );
     } else {
-      // Not yet provisioned — snapshot, create, diff, save-back
-      core.info(`Provisioning ${db.type} database '${db.name}'...`);
+      // No railwayId saved — check if a matching service already exists
+      // (e.g. from a previous run that created it but failed before saving back)
+      const existingByName = await findService(db.name);
 
-      const before = await getServices();
-      const beforeIds = new Set(before.map((s) => s.id));
+      if (existingByName != null) {
+        core.info(
+          `Found existing database matching '${db.name}': ${existingByName.name} (${existingByName.id})`
+        );
+        db.railwayId = existingByName.id;
+        db.railwayServiceName = existingByName.name;
+        configChanged = true;
+      } else {
+        // Not found — snapshot, create, diff, save-back
+        core.info(`Provisioning ${db.type} database '${db.name}'...`);
 
-      await addDatabase(db.type, db.name);
+        const before = await getServices();
+        const beforeIds = new Set(before.map((s) => s.id));
 
-      const after = await getServices();
-      const newService = after.find((s) => !beforeIds.has(s.id));
+        await addDatabase(db.type, db.name);
 
-      if (newService == null) {
-        throw new Error(
-          `Failed to detect newly created database '${db.name}'. ` +
-            `Service list did not change after 'railway add'.`
+        const after = await getServices();
+        const newService = after.find((s) => !beforeIds.has(s.id));
+
+        if (newService == null) {
+          throw new Error(
+            `Failed to detect newly created database '${db.name}'. ` +
+              `Service list did not change after 'railway add'.`
+          );
+        }
+
+        db.railwayId = newService.id;
+        db.railwayServiceName = newService.name;
+        configChanged = true;
+
+        core.info(
+          `Created database '${db.name}' → Railway service '${newService.name}' (${newService.id})`
         );
       }
-
-      db.railwayId = newService.id;
-      db.railwayServiceName = newService.name;
-      configChanged = true;
-
-      core.info(
-        `Created database '${db.name}' → Railway service '${newService.name}' (${newService.id})`
-      );
     }
   }
 
