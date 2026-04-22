@@ -33715,14 +33715,24 @@ async function findServiceById(id) {
 }
 /**
  * Create a database service. Returns the service ID and Railway-assigned name.
+ *
+ * The Railway CLI may output interactive prompts before the JSON
+ * (e.g. "> What do you need? Database"), so we extract the JSON
+ * object from the output rather than parsing it directly.
  */
 async function createDatabase(type) {
-    const result = await railwayJson([
-        'add',
-        '--database',
-        type,
-    ]);
-    return result;
+    const result = await (0,exec.getExecOutput)('railway', ['add', '--database', type, '--json'], {
+        silent: true,
+    });
+    if (result.exitCode !== 0) {
+        throw new Error(`railway add --database ${type} failed: ${result.stderr}`);
+    }
+    // Extract the JSON object from mixed output (prompts + JSON)
+    const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
+    if (jsonMatch == null) {
+        throw new Error(`Could not find JSON in railway add output: ${result.stdout}`);
+    }
+    return JSON.parse(jsonMatch[0]);
 }
 /**
  * Rename a service via Railway's GraphQL API.
@@ -33925,7 +33935,10 @@ async function installRailwayCli() {
 async function verifyGitPushAccess() {
     core.startGroup('Verifying git push access');
     // Create an empty commit and try to push it to verify write access
-    const pushResult = await (0,exec.getExecOutput)('git', ['push', '--dry-run'], { silent: true, ignoreReturnCode: true });
+    const pushResult = await (0,exec.getExecOutput)('git', ['push', '--dry-run'], {
+        silent: true,
+        ignoreReturnCode: true,
+    });
     if (pushResult.exitCode !== 0) {
         throw new Error('Git push access is required but not available. ' +
             'Add "permissions: contents: write" to your workflow file.');

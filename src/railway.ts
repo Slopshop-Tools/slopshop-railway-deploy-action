@@ -173,16 +173,29 @@ export async function findServiceById(id: string): Promise<RailwayService | null
 
 /**
  * Create a database service. Returns the service ID and Railway-assigned name.
+ *
+ * The Railway CLI may output interactive prompts before the JSON
+ * (e.g. "> What do you need? Database"), so we extract the JSON
+ * object from the output rather than parsing it directly.
  */
 export async function createDatabase(
   type: string
 ): Promise<{ serviceId: string; serviceName: string }> {
-  const result = await railwayJson<{ serviceId: string; serviceName: string }>([
-    'add',
-    '--database',
-    type,
-  ]);
-  return result;
+  const result = await getExecOutput('railway', ['add', '--database', type, '--json'], {
+    silent: true,
+  });
+
+  if (result.exitCode !== 0) {
+    throw new Error(`railway add --database ${type} failed: ${result.stderr}`);
+  }
+
+  // Extract the JSON object from mixed output (prompts + JSON)
+  const jsonMatch = result.stdout.match(/\{[\s\S]*\}/);
+  if (jsonMatch == null) {
+    throw new Error(`Could not find JSON in railway add output: ${result.stdout}`);
+  }
+
+  return JSON.parse(jsonMatch[0]) as { serviceId: string; serviceName: string };
 }
 
 /**
