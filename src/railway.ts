@@ -315,57 +315,19 @@ export async function ensureDomain(
 ): Promise<string> {
   // Check for existing domains
   const data = await gql<{
-    project: {
-      services: {
-        edges: Array<{
-          node: {
-            id: string;
-            serviceInstances: {
-              edges: Array<{
-                node: {
-                  domains: {
-                    serviceDomains: Array<{ domain: string }>;
-                  };
-                };
-              }>;
-            };
-          };
-        }>;
-      };
-    };
+    domains: { serviceDomains: Array<{ domain: string }> };
   }>(
-    `query($projectId: String!, $envId: String!) {
-      project(id: $projectId) {
-        services {
-          edges {
-            node {
-              id
-              serviceInstances(environmentId: $envId) {
-                edges {
-                  node {
-                    domains {
-                      serviceDomains { domain }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+    `query($projectId: String!, $environmentId: String!, $serviceId: String!) {
+      domains(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) {
+        serviceDomains { domain }
       }
     }`,
-    { projectId, envId: environmentId }
+    { projectId, environmentId, serviceId }
   );
 
-  // Find the service and check for existing domain
-  for (const svcEdge of data.project.services.edges) {
-    if (svcEdge.node.id === serviceId) {
-      const instance = svcEdge.node.serviceInstances.edges[0];
-      const existing = instance?.node.domains.serviceDomains[0];
-      if (existing != null) {
-        return `https://${existing.domain}`;
-      }
-    }
+  const existing = data.domains.serviceDomains[0];
+  if (existing != null) {
+    return `https://${existing.domain}`;
   }
 
   // No domain exists — create one
