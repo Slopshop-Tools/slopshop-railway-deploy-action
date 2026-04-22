@@ -172,8 +172,13 @@ export async function ensureDomain(serviceName: string): Promise<string> {
     throw new Error(`railway domain --service ${serviceName} failed: ${result.stderr}`);
   }
 
-  // The domain command outputs the URL (e.g., "https://api-production-a1b2.up.railway.app")
-  return result.stdout.trim();
+  // Railway may print informational text around the URL (e.g. "Service Domain created:\n🚀 https://...").
+  // Extract the first https:// URL from the output.
+  const urlMatch = result.stdout.match(/https:\/\/\S+/);
+  if (urlMatch == null) {
+    throw new Error(`Could not find URL in railway domain output: ${result.stdout}`);
+  }
+  return urlMatch[0];
 }
 
 // ============================================================================

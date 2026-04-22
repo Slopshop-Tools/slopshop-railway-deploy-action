@@ -33649,12 +33649,15 @@ async function getServices() {
     try {
         const status = await railwayJson(['status']);
         const raw = status.services;
-        if (raw == null)
+        if (raw == null) {
             return [];
-        if (Array.isArray(raw))
+        }
+        if (Array.isArray(raw)) {
             return raw;
-        if (Array.isArray(raw.edges))
+        }
+        if (Array.isArray(raw.edges)) {
             return raw.edges.map((e) => e.node);
+        }
         return [];
     }
     catch {
@@ -33704,8 +33707,13 @@ async function ensureDomain(serviceName) {
     if (result.exitCode !== 0) {
         throw new Error(`railway domain --service ${serviceName} failed: ${result.stderr}`);
     }
-    // The domain command outputs the URL (e.g., "https://api-production-a1b2.up.railway.app")
-    return result.stdout.trim();
+    // Railway may print informational text around the URL (e.g. "Service Domain created:\n🚀 https://...").
+    // Extract the first https:// URL from the output.
+    const urlMatch = result.stdout.match(/https:\/\/\S+/);
+    if (urlMatch == null) {
+        throw new Error(`Could not find URL in railway domain output: ${result.stdout}`);
+    }
+    return urlMatch[0];
 }
 // ============================================================================
 // Deploy operations
