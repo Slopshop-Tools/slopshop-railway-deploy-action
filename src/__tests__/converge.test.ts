@@ -6,6 +6,7 @@ import type { Config } from '../config.js';
 const mockFindProject = vi.fn();
 const mockCreateProject = vi.fn();
 const mockLinkProject = vi.fn();
+const mockGetServices = vi.fn();
 const mockFindService = vi.fn();
 const mockFindServiceById = vi.fn();
 const mockCreateDatabase = vi.fn();
@@ -19,6 +20,7 @@ vi.mock('../railway.js', () => ({
   findProject: (...args: unknown[]) => mockFindProject(...args),
   createProject: (...args: unknown[]) => mockCreateProject(...args),
   linkProject: (...args: unknown[]) => mockLinkProject(...args),
+  getServices: (...args: unknown[]) => mockGetServices(...args),
   findService: (...args: unknown[]) => mockFindService(...args),
   findServiceById: (...args: unknown[]) => mockFindServiceById(...args),
   createDatabase: (...args: unknown[]) => mockCreateDatabase(...args),
@@ -78,6 +80,8 @@ function configWithDbId(railwayId: string): Config {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: no services exist (fresh project)
+  mockGetServices.mockResolvedValue([]);
   mockEnsureDomain.mockImplementation((name: string) =>
     Promise.resolve(`https://${name}-production-abc123.up.railway.app`)
   );
@@ -136,6 +140,10 @@ describe('converge — fresh project (nothing exists)', () => {
 describe('converge — existing project with provisioned database', () => {
   beforeEach(() => {
     mockFindProject.mockResolvedValue({ id: 'proj_existing', name: 'test-project' });
+    mockGetServices.mockResolvedValue([
+      { id: 'db_existing', name: 'postgres' },
+      { id: 'svc_existing', name: 'api' },
+    ]);
     mockFindService.mockResolvedValue({ id: 'svc_existing', name: 'api' });
     mockFindServiceById.mockResolvedValue({ id: 'db_existing', name: 'postgres' });
   });
@@ -168,6 +176,7 @@ describe('converge — existing project with provisioned database', () => {
   });
 
   it('fails if railwayId points to nonexistent service', async () => {
+    mockGetServices.mockResolvedValue([{ id: 'svc_existing', name: 'api' }]);
     mockFindServiceById.mockResolvedValue(null);
 
     await expect(

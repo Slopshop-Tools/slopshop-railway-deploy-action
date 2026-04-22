@@ -24,6 +24,7 @@ import {
   findProject,
   findService,
   findServiceById,
+  getServices,
   linkProject,
   renameService,
   setVariable,
@@ -55,7 +56,30 @@ export async function converge(
   await linkProject(project.id);
   core.endGroup();
 
-  // Step 2: Ensure databases exist
+  // Step 2: Check for unrecognized services
+  core.startGroup('Checking for unrecognized services');
+
+  const allServices = await getServices();
+  const knownIds = new Set(
+    config.databases.filter((d) => d.railwayId != null).map((d) => d.railwayId)
+  );
+  const knownNames = new Set(config.services.map((s) => s.name));
+
+  const unrecognized = allServices.filter((s) => !knownIds.has(s.id) && !knownNames.has(s.name));
+
+  if (unrecognized.length > 0) {
+    const list = unrecognized.map((s) => `  - ${s.name} (${s.id})`).join('\n');
+    throw new Error(
+      `Unrecognized services found in Railway that are not in the deploy config:\n${list}\n\n` +
+        `This can happen if a previous deploy created a resource but failed before saving its ID.\n` +
+        `Either add the railwayId to your config to adopt it, or delete it from the Railway dashboard.`
+    );
+  }
+
+  core.info(`All ${allServices.length} services in Railway are accounted for`);
+  core.endGroup();
+
+  // Step 3: Ensure databases exist
   core.startGroup('Ensuring databases exist');
 
   for (const db of config.databases) {
