@@ -5,7 +5,7 @@
  * typed access to the configuration values.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import { parse as parseJsonc } from 'jsonc-parser';
 import { z } from 'zod';
@@ -15,6 +15,8 @@ const SUPPORTED_VERSIONS = [1] as const;
 const DatabaseSchema = z.object({
   name: z.string().min(1),
   type: z.enum(['postgres', 'mysql', 'redis', 'mongo']),
+  railwayId: z.string().optional(),
+  railwayServiceName: z.string().optional(),
 });
 
 const ServiceSchema = z.object({
@@ -50,4 +52,12 @@ export function loadConfig(configPath: string): Config {
   const raw = readFileSync(configPath, 'utf-8');
   const json: unknown = parseJsonc(raw);
   return ConfigSchema.parse(json);
+}
+
+/**
+ * Write updated config back to disk as JSON with trailing newline.
+ * Used by the save-back pattern to persist Railway-assigned IDs.
+ */
+export function saveConfig(configPath: string, config: Config): void {
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
 }
