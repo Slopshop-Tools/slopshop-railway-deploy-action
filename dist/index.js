@@ -33840,35 +33840,14 @@ async function setVariable(projectId, environmentId, serviceId, key, value) {
  */
 async function ensureDomain(projectId, environmentId, serviceId) {
     // Check for existing domains
-    const data = await gql(`query($projectId: String!, $envId: String!) {
-      project(id: $projectId) {
-        services {
-          edges {
-            node {
-              id
-              serviceInstances(environmentId: $envId) {
-                edges {
-                  node {
-                    domains {
-                      serviceDomains { domain }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+    const data = await gql(`query($projectId: String!, $environmentId: String!, $serviceId: String!) {
+      domains(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) {
+        serviceDomains { domain }
       }
-    }`, { projectId, envId: environmentId });
-    // Find the service and check for existing domain
-    for (const svcEdge of data.project.services.edges) {
-        if (svcEdge.node.id === serviceId) {
-            const instance = svcEdge.node.serviceInstances.edges[0];
-            const existing = instance?.node.domains.serviceDomains[0];
-            if (existing != null) {
-                return `https://${existing.domain}`;
-            }
-        }
+    }`, { projectId, environmentId, serviceId });
+    const existing = data.domains.serviceDomains[0];
+    if (existing != null) {
+        return `https://${existing.domain}`;
     }
     // No domain exists — create one
     const createData = await gql(`mutation($input: ServiceDomainCreateInput!) {
