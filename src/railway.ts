@@ -112,7 +112,7 @@ export async function getServices(): Promise<RailwayService[]> {
       return raw;
     }
     if (Array.isArray(raw.edges)) {
-      return raw.edges.map((e) => e.node);
+      return raw.edges.map((e: { node: RailwayService }) => e.node);
     }
 
     return [];
@@ -189,13 +189,14 @@ export async function ensureDomain(serviceName: string): Promise<string> {
  * Deploy a service from the repo root.
  * Uploads the entire repo so monorepo build commands (e.g. cd ../..) work.
  * The service's railway.toml in rootDir controls the build/start commands.
+ * Waits for the build to complete so CI fails on build errors.
  */
 export async function deploy(
   serviceName: string,
   repoRoot: string,
   serviceRoot: string
 ): Promise<void> {
-  await exec('railway', ['up', '--service', serviceName, '--detach', serviceRoot], {
+  await exec('railway', ['up', '--service', serviceName, serviceRoot], {
     cwd: repoRoot,
   });
 }

@@ -33722,9 +33722,10 @@ async function ensureDomain(serviceName) {
  * Deploy a service from the repo root.
  * Uploads the entire repo so monorepo build commands (e.g. cd ../..) work.
  * The service's railway.toml in rootDir controls the build/start commands.
+ * Waits for the build to complete so CI fails on build errors.
  */
 async function deploy(serviceName, repoRoot, serviceRoot) {
-    await (0,exec.exec)('railway', ['up', '--service', serviceName, '--detach', serviceRoot], {
+    await (0,exec.exec)('railway', ['up', '--service', serviceName, serviceRoot], {
         cwd: repoRoot,
     });
 }
