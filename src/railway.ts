@@ -94,11 +94,28 @@ interface RailwayService {
 /**
  * Get the list of services in the currently linked project.
  * Parses from `railway status --json`.
+ *
+ * Railway returns services in GraphQL relay format:
+ *   { services: { edges: [{ node: { id, name } }] } }
  */
 export async function getServices(): Promise<RailwayService[]> {
   try {
-    const status = await railwayJson<{ services?: RailwayService[] }>(['status']);
-    return status.services ?? [];
+    const status = await railwayJson<{
+      services?: { edges?: Array<{ node: RailwayService }> } | RailwayService[];
+    }>(['status']);
+
+    const raw = status.services;
+    if (raw == null) {
+      return [];
+    }
+    if (Array.isArray(raw)) {
+      return raw;
+    }
+    if (Array.isArray(raw.edges)) {
+      return raw.edges.map((e) => e.node);
+    }
+
+    return [];
   } catch {
     return [];
   }
