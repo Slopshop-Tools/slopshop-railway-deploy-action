@@ -66,6 +66,8 @@ async function run(): Promise<void> {
 
     // Set the token for the Railway CLI
     core.exportVariable('RAILWAY_API_TOKEN', token);
+    // Suppress interactive prompts in the Railway CLI
+    core.exportVariable('CI', 'true');
     // Mask it from logs
     core.setSecret(token);
 

@@ -33980,6 +33980,8 @@ async function run() {
         const configPath = configInput !== '' ? configInput : 'railway-deploy.jsonc';
         // Set the token for the Railway CLI
         core.exportVariable('RAILWAY_API_TOKEN', token);
+        // Suppress interactive prompts in the Railway CLI
+        core.exportVariable('CI', 'true');
         // Mask it from logs
         core.setSecret(token);
         // Verify push access before doing anything destructive
