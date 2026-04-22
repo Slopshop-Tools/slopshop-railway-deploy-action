@@ -33924,11 +33924,9 @@ async function installRailwayCli() {
  */
 async function verifyGitPushAccess() {
     core.startGroup('Verifying git push access');
-    const result = await (0,exec.getExecOutput)('gh', ['api', 'repos/{owner}/{repo}', '--jq', '.permissions.push'], {
-        silent: true,
-        ignoreReturnCode: true,
-    });
-    if (result.stdout.trim() !== 'true') {
+    // Create an empty commit and try to push it to verify write access
+    const pushResult = await (0,exec.getExecOutput)('git', ['push', '--dry-run'], { silent: true, ignoreReturnCode: true });
+    if (pushResult.exitCode !== 0) {
         throw new Error('Git push access is required but not available. ' +
             'Add "permissions: contents: write" to your workflow file.');
     }
