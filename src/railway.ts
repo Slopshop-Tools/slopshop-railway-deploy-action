@@ -1,11 +1,14 @@
 /**
- * Railway CLI wrapper.
+ * Railway CLI and API wrapper.
  *
- * Executes Railway CLI commands and parses JSON output.
- * All commands assume RAILWAY_API_TOKEN is set in the environment.
+ * CLI commands assume RAILWAY_API_TOKEN is set in the environment.
+ * GraphQL API calls use the token directly via Authorization header.
  */
 
+import * as core from '@actions/core';
 import { exec, getExecOutput } from '@actions/exec';
+
+const RAILWAY_API_URL = 'https://backboard.railway.com/graphql/v2';
 
 /**
  * Run a railway CLI command and return the JSON-parsed output.
@@ -42,6 +45,37 @@ async function railwaySafe(args: string[]): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Execute a GraphQL mutation/query against Railway's API.
+ */
+async function railwayGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  const token = process.env.RAILWAY_API_TOKEN;
+  if (token == null) {
+    throw new Error('RAILWAY_API_TOKEN is not set');
+  }
+
+  const response = await fetch(RAILWAY_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  const body = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+
+  if (body.errors != null && body.errors.length > 0) {
+    throw new Error(`Railway API error: ${body.errors.map((e) => e.message).join(', ')}`);
+  }
+
+  if (body.data == null) {
+    throw new Error('Railway API returned no data');
+  }
+
+  return body.data;
 }
 
 // ============================================================================
@@ -86,7 +120,7 @@ export async function linkProject(projectId: string): Promise<void> {
 // Service operations
 // ============================================================================
 
-interface RailwayService {
+export interface RailwayService {
   id: string;
   name: string;
 }
@@ -122,19 +156,47 @@ export async function getServices(): Promise<RailwayService[]> {
 }
 
 /**
- * Find a service by name in the current project.
+ * Find a service by exact name in the current project.
  */
 export async function findService(name: string): Promise<RailwayService | null> {
   const services = await getServices();
-  const lower = name.toLowerCase();
-  return services.find((s) => s.name.toLowerCase() === lower) ?? null;
+  return services.find((s) => s.name === name) ?? null;
 }
 
 /**
- * Add a database service with an explicit name.
+ * Find a service by Railway ID.
  */
-export async function addDatabase(type: string, name: string): Promise<void> {
-  await railway(['add', '--database', type, '--service', name]);
+export async function findServiceById(id: string): Promise<RailwayService | null> {
+  const services = await getServices();
+  return services.find((s) => s.id === id) ?? null;
+}
+
+/**
+ * Create a database service. Returns the service ID and Railway-assigned name.
+ */
+export async function createDatabase(
+  type: string
+): Promise<{ serviceId: string; serviceName: string }> {
+  const result = await railwayJson<{ serviceId: string; serviceName: string }>([
+    'add',
+    '--database',
+    type,
+  ]);
+  return result;
+}
+
+/**
+ * Rename a service via Railway's GraphQL API.
+ */
+export async function renameService(serviceId: string, newName: string): Promise<void> {
+  core.info(`Renaming service ${serviceId} to '${newName}'...`);
+
+  await railwayGraphql<{ serviceUpdate: { id: string; name: string } }>(
+    `mutation serviceUpdate($id: String!, $input: ServiceUpdateInput!) {
+      serviceUpdate(id: $id, input: $input) { id name }
+    }`,
+    { id: serviceId, input: { name: newName } }
+  );
 }
 
 /**

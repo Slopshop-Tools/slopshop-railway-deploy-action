@@ -40,9 +40,6 @@
               },
               "railwayId": {
                 "type": "string"
-              },
-              "railwayServiceName": {
-                "type": "string"
               }
             },
             "required": [

@@ -16,7 +16,6 @@ const DatabaseSchema = z.object({
   name: z.string().min(1),
   type: z.enum(['postgres', 'mysql', 'redis', 'mongo']),
   railwayId: z.string().optional(),
-  railwayServiceName: z.string().optional(),
 });
 
 const ServiceSchema = z.object({

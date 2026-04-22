@@ -6,64 +6,39 @@
  * this multiple times produces the same result.
  *
  * Databases use a save-back pattern: after creating a database,
- * Railway assigns its own name/ID which gets written back into the
- * config file and committed to the repo.
+ * the Railway-assigned ID is written back to the config and pushed
+ * immediately. The service is then renamed to match the config name
+ * so variable references (e.g. ${{postgres.DATABASE_URL}}) resolve.
  */
 
 import * as core from '@actions/core';
 
-import type { Config, DatabaseConfig } from './config.js';
+import type { Config } from './config.js';
+import { saveConfig } from './config.js';
 import {
-  addDatabase,
   addService,
+  createDatabase,
   createProject,
   deploy,
   ensureDomain,
   findProject,
   findService,
-  getServices,
+  findServiceById,
   linkProject,
+  renameService,
   setVariable,
 } from './railway.js';
 
 export interface ConvergeResult {
   services: Array<{ name: string; url: string }>;
-  configChanged: boolean;
 }
 
-/**
- * Build a mapping from config database names to their actual Railway service names.
- * Used to rewrite variable references like ${{postgres.DATABASE_URL}} to ${{Postgres.DATABASE_URL}}.
- */
-function buildNameMapping(databases: DatabaseConfig[]): Map<string, string> {
-  const mapping = new Map<string, string>();
-  for (const db of databases) {
-    if (db.railwayServiceName != null) {
-      // Store lowercase key so lookups are case-insensitive
-      mapping.set(db.name.toLowerCase(), db.railwayServiceName);
-    }
-  }
-  return mapping;
-}
-
-/**
- * Rewrite Railway variable references using the name mapping.
- * Replaces ${{configName.VAR}} with ${{actualName.VAR}}.
- * Lookup is case-insensitive so ${{postgres.X}} and ${{Postgres.X}} both match.
- */
-function rewriteVariableRef(value: string, nameMapping: Map<string, string>): string {
-  return value.replace(/\$\{\{(\w+)\.([\w.]+)\}\}/g, (_match, name: string, rest: string) => {
-    const actual = nameMapping.get(name.toLowerCase());
-    if (actual != null) {
-      return '${{' + actual + '.' + rest + '}}';
-    }
-    return _match;
-  });
-}
-
-export async function converge(config: Config, repoRoot: string): Promise<ConvergeResult> {
-  let configChanged = false;
-
+export async function converge(
+  config: Config,
+  repoRoot: string,
+  configPath: string,
+  commitAndPush: (message: string) => Promise<void>
+): Promise<ConvergeResult> {
   // Step 1: Ensure project exists
   core.startGroup(`Ensuring project '${config.project.name}' exists`);
 
@@ -80,68 +55,52 @@ export async function converge(config: Config, repoRoot: string): Promise<Conver
   await linkProject(project.id);
   core.endGroup();
 
-  // Step 2: Ensure databases exist (with save-back)
+  // Step 2: Ensure databases exist
   core.startGroup('Ensuring databases exist');
 
   for (const db of config.databases) {
     if (db.railwayId != null) {
-      // Already provisioned — verify it still exists
+      // Already provisioned — verify it exists and name matches
       const existing = await findServiceById(db.railwayId);
       if (existing == null) {
         throw new Error(
           `Database '${db.name}' has railwayId '${db.railwayId}' but no matching service exists in Railway. ` +
-            `It may have been deleted. Remove the railwayId and railwayServiceName from the config to re-create it.`
+            `It may have been deleted. Remove the railwayId from the config to re-create it.`
         );
       }
-      core.info(
-        `Database '${db.name}' already provisioned: ${db.railwayServiceName} (${db.railwayId})`
-      );
-    } else {
-      // No railwayId saved — check if a matching service already exists
-      // (e.g. from a previous run that created it but failed before saving back)
-      const existingByName = await findService(db.name);
 
-      if (existingByName != null) {
-        core.info(
-          `Found existing database matching '${db.name}': ${existingByName.name} (${existingByName.id})`
-        );
-        db.railwayId = existingByName.id;
-        db.railwayServiceName = existingByName.name;
-        configChanged = true;
+      // Ensure the name matches (handles retry after failed rename)
+      if (existing.name !== db.name) {
+        core.info(`Database '${db.name}' exists as '${existing.name}' — renaming...`);
+        await renameService(db.railwayId, db.name);
+        core.info(`Renamed to '${db.name}'`);
       } else {
-        // Not found — snapshot, create, diff, save-back
-        core.info(`Provisioning ${db.type} database '${db.name}'...`);
+        core.info(`Database '${db.name}' already provisioned (${db.railwayId})`);
+      }
+    } else {
+      // Not yet provisioned — create, save ID immediately, then rename
+      core.info(`Provisioning ${db.type} database '${db.name}'...`);
 
-        const before = await getServices();
-        const beforeIds = new Set(before.map((s) => s.id));
+      const created = await createDatabase(db.type);
+      core.info(
+        `Created database: Railway service '${created.serviceName}' (${created.serviceId})`
+      );
 
-        await addDatabase(db.type, db.name);
+      // Save the ID to config and push immediately so it's never lost
+      db.railwayId = created.serviceId;
+      saveConfig(configPath, config);
+      await commitAndPush(`chore: save Railway ID for database '${db.name}'`);
+      core.info(`Saved railwayId to config`);
 
-        const after = await getServices();
-        const newService = after.find((s) => !beforeIds.has(s.id));
-
-        if (newService == null) {
-          throw new Error(
-            `Failed to detect newly created database '${db.name}'. ` +
-              `Service list did not change after 'railway add'.`
-          );
-        }
-
-        db.railwayId = newService.id;
-        db.railwayServiceName = newService.name;
-        configChanged = true;
-
-        core.info(
-          `Created database '${db.name}' → Railway service '${newService.name}' (${newService.id})`
-        );
+      // Rename to match config name
+      if (created.serviceName !== db.name) {
+        await renameService(created.serviceId, db.name);
+        core.info(`Renamed '${created.serviceName}' → '${db.name}'`);
       }
     }
   }
 
   core.endGroup();
-
-  // Build name mapping for variable reference rewriting
-  const nameMapping = buildNameMapping(config.databases);
 
   // Step 3: Ensure services exist
   core.startGroup('Ensuring services exist');
@@ -159,7 +118,7 @@ export async function converge(config: Config, repoRoot: string): Promise<Conver
 
   core.endGroup();
 
-  // Step 4: Set variables on services (rewriting references to actual Railway names)
+  // Step 4: Set variables on services
   core.startGroup('Setting variables');
 
   for (const svc of config.services) {
@@ -170,13 +129,8 @@ export async function converge(config: Config, repoRoot: string): Promise<Conver
     core.info(`Variables for service '${svc.name}':`);
 
     for (const [key, value] of Object.entries(svc.variables)) {
-      const rewritten = rewriteVariableRef(value, nameMapping);
-      if (rewritten !== value) {
-        core.info(`  ${key}=${value} → ${rewritten}`);
-      } else {
-        core.info(`  ${key}=${value}`);
-      }
-      await setVariable(svc.name, key, rewritten);
+      core.info(`  ${key}=${value}`);
+      await setVariable(svc.name, key, value);
     }
   }
 
@@ -206,13 +160,5 @@ export async function converge(config: Config, repoRoot: string): Promise<Conver
   core.endGroup();
 
   core.info('Deployment complete!');
-  return { services, configChanged };
-}
-
-/**
- * Find a service by Railway ID.
- */
-async function findServiceById(id: string): Promise<{ id: string; name: string } | null> {
-  const services = await getServices();
-  return services.find((s) => s.id === id) ?? null;
+  return { services };
 }

@@ -33548,7 +33548,6 @@ const DatabaseSchema = objectType({
     name: stringType().min(1),
     type: enumType(['postgres', 'mysql', 'redis', 'mongo']),
     railwayId: stringType().optional(),
-    railwayServiceName: stringType().optional(),
 });
 const ServiceSchema = objectType({
     name: stringType().min(1),
@@ -33583,12 +33582,14 @@ function saveConfig(configPath, config) {
 
 ;// CONCATENATED MODULE: ./src/railway.ts
 /**
- * Railway CLI wrapper.
+ * Railway CLI and API wrapper.
  *
- * Executes Railway CLI commands and parses JSON output.
- * All commands assume RAILWAY_API_TOKEN is set in the environment.
+ * CLI commands assume RAILWAY_API_TOKEN is set in the environment.
+ * GraphQL API calls use the token directly via Authorization header.
  */
 
+
+const RAILWAY_API_URL = 'https://backboard.railway.com/graphql/v2';
 /**
  * Run a railway CLI command and return the JSON-parsed output.
  */
@@ -33621,6 +33622,31 @@ async function railwaySafe(args) {
     catch {
         return false;
     }
+}
+/**
+ * Execute a GraphQL mutation/query against Railway's API.
+ */
+async function railwayGraphql(query, variables) {
+    const token = process.env.RAILWAY_API_TOKEN;
+    if (token == null) {
+        throw new Error('RAILWAY_API_TOKEN is not set');
+    }
+    const response = await fetch(RAILWAY_API_URL, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query, variables }),
+    });
+    const body = (await response.json());
+    if (body.errors != null && body.errors.length > 0) {
+        throw new Error(`Railway API error: ${body.errors.map((e) => e.message).join(', ')}`);
+    }
+    if (body.data == null) {
+        throw new Error('Railway API returned no data');
+    }
+    return body.data;
 }
 /**
  * List all projects accessible to the current token.
@@ -33674,18 +33700,38 @@ async function getServices() {
     }
 }
 /**
- * Find a service by name in the current project.
+ * Find a service by exact name in the current project.
  */
 async function findService(name) {
     const services = await getServices();
-    const lower = name.toLowerCase();
-    return services.find((s) => s.name.toLowerCase() === lower) ?? null;
+    return services.find((s) => s.name === name) ?? null;
 }
 /**
- * Add a database service with an explicit name.
+ * Find a service by Railway ID.
  */
-async function addDatabase(type, name) {
-    await railway(['add', '--database', type, '--service', name]);
+async function findServiceById(id) {
+    const services = await getServices();
+    return services.find((s) => s.id === id) ?? null;
+}
+/**
+ * Create a database service. Returns the service ID and Railway-assigned name.
+ */
+async function createDatabase(type) {
+    const result = await railwayJson([
+        'add',
+        '--database',
+        type,
+    ]);
+    return result;
+}
+/**
+ * Rename a service via Railway's GraphQL API.
+ */
+async function renameService(serviceId, newName) {
+    core.info(`Renaming service ${serviceId} to '${newName}'...`);
+    await railwayGraphql(`mutation serviceUpdate($id: String!, $input: ServiceUpdateInput!) {
+      serviceUpdate(id: $id, input: $input) { id name }
+    }`, { id: serviceId, input: { name: newName } });
 }
 /**
  * Add an empty service with a name.
@@ -33749,41 +33795,14 @@ async function deploy(serviceName, repoRoot) {
  * this multiple times produces the same result.
  *
  * Databases use a save-back pattern: after creating a database,
- * Railway assigns its own name/ID which gets written back into the
- * config file and committed to the repo.
+ * the Railway-assigned ID is written back to the config and pushed
+ * immediately. The service is then renamed to match the config name
+ * so variable references (e.g. ${{postgres.DATABASE_URL}}) resolve.
  */
 
 
-/**
- * Build a mapping from config database names to their actual Railway service names.
- * Used to rewrite variable references like ${{postgres.DATABASE_URL}} to ${{Postgres.DATABASE_URL}}.
- */
-function buildNameMapping(databases) {
-    const mapping = new Map();
-    for (const db of databases) {
-        if (db.railwayServiceName != null) {
-            // Store lowercase key so lookups are case-insensitive
-            mapping.set(db.name.toLowerCase(), db.railwayServiceName);
-        }
-    }
-    return mapping;
-}
-/**
- * Rewrite Railway variable references using the name mapping.
- * Replaces ${{configName.VAR}} with ${{actualName.VAR}}.
- * Lookup is case-insensitive so ${{postgres.X}} and ${{Postgres.X}} both match.
- */
-function rewriteVariableRef(value, nameMapping) {
-    return value.replace(/\$\{\{(\w+)\.([\w.]+)\}\}/g, (_match, name, rest) => {
-        const actual = nameMapping.get(name.toLowerCase());
-        if (actual != null) {
-            return '${{' + actual + '.' + rest + '}}';
-        }
-        return _match;
-    });
-}
-async function converge(config, repoRoot) {
-    let configChanged = false;
+
+async function converge(config, repoRoot, configPath, commitAndPush) {
     // Step 1: Ensure project exists
     core.startGroup(`Ensuring project '${config.project.name}' exists`);
     let project = await findProject(config.project.name);
@@ -33797,50 +33816,44 @@ async function converge(config, repoRoot) {
     }
     await linkProject(project.id);
     core.endGroup();
-    // Step 2: Ensure databases exist (with save-back)
+    // Step 2: Ensure databases exist
     core.startGroup('Ensuring databases exist');
     for (const db of config.databases) {
         if (db.railwayId != null) {
-            // Already provisioned — verify it still exists
+            // Already provisioned — verify it exists and name matches
             const existing = await findServiceById(db.railwayId);
             if (existing == null) {
                 throw new Error(`Database '${db.name}' has railwayId '${db.railwayId}' but no matching service exists in Railway. ` +
-                    `It may have been deleted. Remove the railwayId and railwayServiceName from the config to re-create it.`);
+                    `It may have been deleted. Remove the railwayId from the config to re-create it.`);
             }
-            core.info(`Database '${db.name}' already provisioned: ${db.railwayServiceName} (${db.railwayId})`);
-        }
-        else {
-            // No railwayId saved — check if a matching service already exists
-            // (e.g. from a previous run that created it but failed before saving back)
-            const existingByName = await findService(db.name);
-            if (existingByName != null) {
-                core.info(`Found existing database matching '${db.name}': ${existingByName.name} (${existingByName.id})`);
-                db.railwayId = existingByName.id;
-                db.railwayServiceName = existingByName.name;
-                configChanged = true;
+            // Ensure the name matches (handles retry after failed rename)
+            if (existing.name !== db.name) {
+                core.info(`Database '${db.name}' exists as '${existing.name}' — renaming...`);
+                await renameService(db.railwayId, db.name);
+                core.info(`Renamed to '${db.name}'`);
             }
             else {
-                // Not found — snapshot, create, diff, save-back
-                core.info(`Provisioning ${db.type} database '${db.name}'...`);
-                const before = await getServices();
-                const beforeIds = new Set(before.map((s) => s.id));
-                await addDatabase(db.type, db.name);
-                const after = await getServices();
-                const newService = after.find((s) => !beforeIds.has(s.id));
-                if (newService == null) {
-                    throw new Error(`Failed to detect newly created database '${db.name}'. ` +
-                        `Service list did not change after 'railway add'.`);
-                }
-                db.railwayId = newService.id;
-                db.railwayServiceName = newService.name;
-                configChanged = true;
-                core.info(`Created database '${db.name}' → Railway service '${newService.name}' (${newService.id})`);
+                core.info(`Database '${db.name}' already provisioned (${db.railwayId})`);
+            }
+        }
+        else {
+            // Not yet provisioned — create, save ID immediately, then rename
+            core.info(`Provisioning ${db.type} database '${db.name}'...`);
+            const created = await createDatabase(db.type);
+            core.info(`Created database: Railway service '${created.serviceName}' (${created.serviceId})`);
+            // Save the ID to config and push immediately so it's never lost
+            db.railwayId = created.serviceId;
+            saveConfig(configPath, config);
+            await commitAndPush(`chore: save Railway ID for database '${db.name}'`);
+            core.info(`Saved railwayId to config`);
+            // Rename to match config name
+            if (created.serviceName !== db.name) {
+                await renameService(created.serviceId, db.name);
+                core.info(`Renamed '${created.serviceName}' → '${db.name}'`);
             }
         }
     }
     core.endGroup();
-    // Build name mapping for variable reference rewriting
-    const nameMapping = buildNameMapping(config.databases);
     // Step 3: Ensure services exist
     core.startGroup('Ensuring services exist');
     for (const svc of config.services) {
@@ -33854,7 +33867,7 @@ async function converge(config, repoRoot) {
         }
     }
     core.endGroup();
-    // Step 4: Set variables on services (rewriting references to actual Railway names)
+    // Step 4: Set variables on services
     core.startGroup('Setting variables');
     for (const svc of config.services) {
         if (svc.variables == null) {
@@ -33862,14 +33875,8 @@ async function converge(config, repoRoot) {
         }
         core.info(`Variables for service '${svc.name}':`);
         for (const [key, value] of Object.entries(svc.variables)) {
-            const rewritten = rewriteVariableRef(value, nameMapping);
-            if (rewritten !== value) {
-                core.info(`  ${key}=${value} → ${rewritten}`);
-            }
-            else {
-                core.info(`  ${key}=${value}`);
-            }
-            await setVariable(svc.name, key, rewritten);
+            core.info(`  ${key}=${value}`);
+            await setVariable(svc.name, key, value);
         }
     }
     core.endGroup();
@@ -33890,14 +33897,7 @@ async function converge(config, repoRoot) {
     }
     core.endGroup();
     core.info('Deployment complete!');
-    return { services, configChanged };
-}
-/**
- * Find a service by Railway ID.
- */
-async function findServiceById(id) {
-    const services = await getServices();
-    return services.find((s) => s.id === id) ?? null;
+    return { services };
 }
 
 ;// CONCATENATED MODULE: ./src/index.ts
@@ -33906,7 +33906,7 @@ async function findServiceById(id) {
  *
  * Reads the config file, validates it, and converges Railway infrastructure.
  * If new resources are provisioned (databases), the config is updated with
- * Railway-assigned IDs and committed back to the repo.
+ * Railway-assigned IDs and committed back to the repo immediately.
  */
 
 
@@ -33919,17 +33919,32 @@ async function installRailwayCli() {
     core.endGroup();
 }
 /**
- * Commit updated config file back to the repo so Railway-assigned
- * resource IDs are persisted for subsequent deploys.
+ * Verify that git push will work before creating any resources.
+ * Uses the GitHub API to check repository permissions.
  */
-async function commitConfigChanges(configPath) {
-    core.startGroup('Committing config changes');
+async function verifyGitPushAccess() {
+    core.startGroup('Verifying git push access');
+    const result = await (0,exec.getExecOutput)('gh', ['api', 'repos/{owner}/{repo}', '--jq', '.permissions.push'], {
+        silent: true,
+        ignoreReturnCode: true,
+    });
+    if (result.stdout.trim() !== 'true') {
+        throw new Error('Git push access is required but not available. ' +
+            'Add "permissions: contents: write" to your workflow file.');
+    }
+    core.info('Git push access verified');
+    // Configure git for commits
     await (0,exec.exec)('git', ['config', 'user.name', 'github-actions[bot]']);
     await (0,exec.exec)('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
-    await (0,exec.exec)('git', ['add', configPath]);
-    await (0,exec.exec)('git', ['commit', '-m', 'chore: save Railway resource IDs to deploy config']);
-    await (0,exec.exec)('git', ['push']);
     core.endGroup();
+}
+/**
+ * Commit a file and push to the repo.
+ */
+async function commitAndPush(configPath, message) {
+    await (0,exec.exec)('git', ['add', configPath]);
+    await (0,exec.exec)('git', ['commit', '-m', message]);
+    await (0,exec.exec)('git', ['push']);
 }
 async function run() {
     try {
@@ -33940,6 +33955,8 @@ async function run() {
         core.exportVariable('RAILWAY_API_TOKEN', token);
         // Mask it from logs
         core.setSecret(token);
+        // Verify push access before doing anything destructive
+        await verifyGitPushAccess();
         await installRailwayCli();
         const repoRoot = process.env.GITHUB_WORKSPACE ?? process.cwd();
         const fullConfigPath = (0,external_node_path_namespaceObject.resolve)(repoRoot, configPath);
@@ -33951,13 +33968,7 @@ async function run() {
         const svcNames = config.services.map((s) => s.name).join(', ');
         core.info(`Databases: ${dbNames !== '' ? dbNames : 'none'}`);
         core.info(`Services: ${svcNames !== '' ? svcNames : 'none'}`);
-        const result = await converge(config, repoRoot);
-        // Save and commit config if Railway-assigned IDs were added
-        if (result.configChanged) {
-            core.info('Config changed — saving Railway resource IDs...');
-            saveConfig(fullConfigPath, config);
-            await commitConfigChanges(configPath);
-        }
+        const result = await converge(config, repoRoot, fullConfigPath, (message) => commitAndPush(configPath, message));
         // Set outputs for each service URL (keyed by service name)
         for (const svc of result.services) {
             core.setOutput(`${svc.name}_url`, svc.url);

@@ -3,15 +3,15 @@
  *
  * Reads the config file, validates it, and converges Railway infrastructure.
  * If new resources are provisioned (databases), the config is updated with
- * Railway-assigned IDs and committed back to the repo.
+ * Railway-assigned IDs and committed back to the repo immediately.
  */
 
 import { resolve } from 'node:path';
 
 import * as core from '@actions/core';
-import { exec } from '@actions/exec';
+import { exec, getExecOutput } from '@actions/exec';
 
-import { loadConfig, saveConfig } from './config.js';
+import { loadConfig } from './config.js';
 import { converge } from './converge.js';
 
 async function installRailwayCli(): Promise<void> {
@@ -21,19 +21,44 @@ async function installRailwayCli(): Promise<void> {
 }
 
 /**
- * Commit updated config file back to the repo so Railway-assigned
- * resource IDs are persisted for subsequent deploys.
+ * Verify that git push will work before creating any resources.
+ * Uses the GitHub API to check repository permissions.
  */
-async function commitConfigChanges(configPath: string): Promise<void> {
-  core.startGroup('Committing config changes');
+async function verifyGitPushAccess(): Promise<void> {
+  core.startGroup('Verifying git push access');
 
+  const result = await getExecOutput(
+    'gh',
+    ['api', 'repos/{owner}/{repo}', '--jq', '.permissions.push'],
+    {
+      silent: true,
+      ignoreReturnCode: true,
+    }
+  );
+
+  if (result.stdout.trim() !== 'true') {
+    throw new Error(
+      'Git push access is required but not available. ' +
+        'Add "permissions: contents: write" to your workflow file.'
+    );
+  }
+
+  core.info('Git push access verified');
+
+  // Configure git for commits
   await exec('git', ['config', 'user.name', 'github-actions[bot]']);
   await exec('git', ['config', 'user.email', 'github-actions[bot]@users.noreply.github.com']);
-  await exec('git', ['add', configPath]);
-  await exec('git', ['commit', '-m', 'chore: save Railway resource IDs to deploy config']);
-  await exec('git', ['push']);
 
   core.endGroup();
+}
+
+/**
+ * Commit a file and push to the repo.
+ */
+async function commitAndPush(configPath: string, message: string): Promise<void> {
+  await exec('git', ['add', configPath]);
+  await exec('git', ['commit', '-m', message]);
+  await exec('git', ['push']);
 }
 
 async function run(): Promise<void> {
@@ -46,6 +71,9 @@ async function run(): Promise<void> {
     core.exportVariable('RAILWAY_API_TOKEN', token);
     // Mask it from logs
     core.setSecret(token);
+
+    // Verify push access before doing anything destructive
+    await verifyGitPushAccess();
 
     await installRailwayCli();
 
@@ -61,14 +89,9 @@ async function run(): Promise<void> {
     core.info(`Databases: ${dbNames !== '' ? dbNames : 'none'}`);
     core.info(`Services: ${svcNames !== '' ? svcNames : 'none'}`);
 
-    const result = await converge(config, repoRoot);
-
-    // Save and commit config if Railway-assigned IDs were added
-    if (result.configChanged) {
-      core.info('Config changed — saving Railway resource IDs...');
-      saveConfig(fullConfigPath, config);
-      await commitConfigChanges(configPath);
-    }
+    const result = await converge(config, repoRoot, fullConfigPath, (message: string) =>
+      commitAndPush(configPath, message)
+    );
 
     // Set outputs for each service URL (keyed by service name)
     for (const svc of result.services) {
