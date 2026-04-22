@@ -13,6 +13,9 @@
             "name": {
               "type": "string",
               "minLength": 1
+            },
+            "railwayId": {
+              "type": "string"
             }
           },
           "required": [
@@ -62,6 +65,9 @@
               "root": {
                 "type": "string",
                 "minLength": 1
+              },
+              "railwayId": {
+                "type": "string"
               },
               "variables": {
                 "type": "object",
