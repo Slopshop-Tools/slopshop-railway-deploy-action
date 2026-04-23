@@ -237,7 +237,9 @@ export async function createDatabase(
   }
 
   // Deploy the template
-  await gql(
+  const deployData = await gql<{
+    templateDeployV2: { projectId: string; workflowId: string };
+  }>(
     `mutation($input: TemplateDeployV2Input!) {
       templateDeployV2(input: $input) { projectId workflowId }
     }`,
@@ -251,22 +253,43 @@ export async function createDatabase(
     }
   );
 
-  // Poll for the newly created service (template deploy is async)
-  const maxAttempts = 15;
+  // Wait for the template deploy workflow to complete
+  const workflowId = deployData.templateDeployV2.workflowId;
+  const maxAttempts = 30;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const services = await getServices(projectId);
-    const created = services.find((s) => s.name === name);
-    if (created != null) {
-      return created;
+    const statusData = await gql<{
+      workflowStatus: { status: string; error: string | null };
+    }>(`query($id: String!) { workflowStatus(workflowId: $id) { status error } }`, {
+      id: workflowId,
+    });
+
+    const { status, error } = statusData.workflowStatus;
+
+    if (status === 'Complete') {
+      break;
     }
-    if (attempt < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (status === 'Error') {
+      throw new Error(`Database template deploy failed: ${error ?? 'unknown error'}`);
     }
+    if (attempt === maxAttempts) {
+      throw new Error(
+        `Database template deploy timed out after ${maxAttempts * 10}s (status: ${status})`
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
   }
 
-  throw new Error(
-    `Database '${name}' was deployed via template but the service did not appear after ${maxAttempts} attempts`
-  );
+  // Find the newly created service
+  const services = await getServices(projectId);
+  const created = services.find((s) => s.name === name);
+  if (created == null) {
+    throw new Error(
+      `Database '${name}' workflow completed but the service was not found in the project`
+    );
+  }
+
+  return created;
 }
 
 // ============================================================================
